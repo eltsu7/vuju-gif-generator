@@ -71,7 +71,6 @@ if __name__ == "__main__":
         output_path = output_folder / (str(i) + ".gif")
         print(f"[{i} / {number_of_gifs}] {output_path}")
         generate(batch, output_path)
-        break
 
     elapsed_seconds = time.time() - start_time
 
