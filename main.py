@@ -3,6 +3,7 @@ import time
 import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
+from pprint import pprint
 
 from PIL import Image
 
@@ -64,16 +65,30 @@ def batch_gifs(input_dict: dict[int, dict[datetime, Path]], first_batch_times: l
     for master_capture_time in master_dict:
         current_batch = []
         for i in input_dict:
+            batch_slice = []
             for capture_time in input_dict[i]:
                 time_diff = abs(
                     (master_capture_time - first_batch_times[0]) - (capture_time - first_batch_times[i])
                 )
-                if time_diff <= timedelta(seconds=1):
-                    current_batch.append(input_dict[i][capture_time])
+                if time_diff <= timedelta(seconds=0):
+                    batch_slice.append(input_dict[i][capture_time])
+                    break
+            if not batch_slice:
+                for capture_time in input_dict[i]:
+                    # print("Not found 0 timedelta")
+                    time_diff = abs(
+                        (master_capture_time - first_batch_times[0]) - (capture_time - first_batch_times[i])
+                    )
+                    if time_diff <= timedelta(seconds=1):
+                        batch_slice.append(input_dict[i][capture_time])
+                        if len(batch_slice) > 1:
+                            print(f"More than one image found for {master_dict[master_capture_time]}, "
+                                  f"Folder: {i + 1}, image: {input_dict[i][capture_time]}")
+                            current_batch.append(batch_slice[0])
+            else:
+                current_batch += batch_slice
+        print(f"{len(batches)}: {len(current_batch)}")
         batches.append(current_batch)
-
-    for i in batches:
-        print(len(i))
     return batches
 
 
@@ -86,8 +101,8 @@ def parse_folders(root_path: Path) -> dict[int, dict[datetime, Path]]:
         for filename in filenames:
             file_path = source_folders[i] / filename
             light = get_average_light_value(file_path)
-            print(light)
             if light < 30:
+                print(f"File {str(file_path)} underexposed!")
                 continue
             capture_time = get_date_from_image(file_path)
             if i not in output:
@@ -100,25 +115,32 @@ def main(root_path):
     output_folder = root_path / OUTPUT_FOLDER_NAME
     output_folder.mkdir(exist_ok=True)
 
-    first_batch_times = get_first_batch_times(root_path)
-    d = parse_folders(root_path)
-    batches = batch_gifs(d, first_batch_times)
-
-    exit()
-
     start_time = time.time()
-    for i in range(len(batches)):
-        output_path = output_folder / (str(i) + ".gif")
-        print(f"[{i} / {len(batches)}] {output_path}")
-        generate_gif(batches[i], output_path)
-        if i == -1:
-            break
+    print("Analyzing input images...")
+    first_batch_times = get_first_batch_times(root_path)
+    sorted_paths = parse_folders(root_path)
+
+    print("Folder sizes:")
+    for i in sorted_paths:
+        print(f"\t{i}: {len(sorted_paths[i])}")
+
+    print("Creating batches...")
+    batches = batch_gifs(sorted_paths, first_batch_times)
+    number_of_batches = len(batches)
+
+    if 1:
+        for i in range(len(batches)):
+            output_path = output_folder / (str(i) + ".gif")
+            print(f"[{i} / {number_of_batches}] {output_path}")
+            generate_gif(batches[i], output_path)
+            if i == -1:
+                break
 
     elapsed_seconds = time.time() - start_time
 
     print(
         f"Done! That took {round(elapsed_seconds, 2)} seconds, "
-        f"around {round(elapsed_seconds / len(batches), 2)} seconds per gif."
+        f"around {round(elapsed_seconds / number_of_batches, 2)} seconds per gif."
     )
 
 
