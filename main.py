@@ -24,7 +24,7 @@ def last_number(filename: str) -> int:
     return int(filename.split(".")[0].split("_")[-1])
 
 
-def get_exif_date_from_path(path: Path):
+def get_date_from_image(path: Path) -> datetime:
     info = Image.open(path).getexif().get_ifd(0x8769)
     datestring, timestring = info[0x9003].split(" ")
     datelist = [int(i) for i in datestring.split(":")]
@@ -43,12 +43,18 @@ def generate_gif(image_paths: list[Path], output_path: Path):
     )
 
 
+def get_average_light_value(path: Path) -> int:
+    image = Image.open(path)
+    image.thumbnail((1, 1))
+    return sum(image.getpixel((0, 0)))
+
+
 def get_first_batch_times(root_path: Path) -> list[datetime]:
     source_folders = [root_path / folder_name for folder_name in SUBFOLDER_NAMES]
     times: list[datetime] = []
     for folder in source_folders:
         filenames = sorted(os.listdir(folder), key=last_number)
-        times.append(get_exif_date_from_path(folder / filenames[0]))
+        times.append(get_date_from_image(folder / filenames[0]))
     return times
 
 
@@ -79,19 +85,26 @@ def parse_folders(root_path: Path) -> dict[int, dict[datetime, Path]]:
         filenames = sorted(os.listdir(source_folders[i]), key=last_number)
         for filename in filenames:
             file_path = source_folders[i] / filename
-            capture_time = get_exif_date_from_path(file_path)
+            light = get_average_light_value(file_path)
+            print(light)
+            if light < 30:
+                continue
+            capture_time = get_date_from_image(file_path)
             if i not in output:
                 output[i] = {}
             output[i][capture_time] = file_path
     return output
 
 
-def new_main(root_path):
+def main(root_path):
     output_folder = root_path / OUTPUT_FOLDER_NAME
     output_folder.mkdir(exist_ok=True)
+
     first_batch_times = get_first_batch_times(root_path)
     d = parse_folders(root_path)
     batches = batch_gifs(d, first_batch_times)
+
+    exit()
 
     start_time = time.time()
     for i in range(len(batches)):
@@ -120,4 +133,4 @@ if __name__ == "__main__":
     for name in SUBFOLDER_NAMES:
         if not os.path.exists(root_path / name):
             raise NameError("Can't find correct subfolders")
-    new_main(root_path)
+    main(root_path)
