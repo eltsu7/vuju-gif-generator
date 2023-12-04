@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 import argparse
 from pathlib import Path
@@ -9,13 +10,13 @@ from PIL import Image
 
 SUBFOLDER_NAMES = [
     "master",
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
+    "Cam1",
+    "Cam2",
+    "Cam3",
+    "Cam4",
+    "Cam5",
+    "Cam6",
+    "Cam7",
 ]
 
 OUTPUT_FOLDER_NAME = "output"
@@ -39,8 +40,11 @@ def get_date_from_image(path: Path) -> datetime:
 def generate_gif(image_paths: list[Path], output_path: Path):
     frames = [Image.open(frame) for frame in image_paths]
     frames = frames + frames[::-1]
+    if len(image_paths) == 0:
+        print("No images!")
+        return
     frames[0].save(
-        fp=output_path, save_all=True, append_images=frames, duration=75, loop=0
+        fp=output_path, save_all=True, append_images=frames, duration=75, loop=0, optimize=True
     )
 
 
@@ -59,36 +63,42 @@ def get_first_batch_times(root_path: Path) -> list[datetime]:
     return times
 
 
+def find_closest_image(folder: dict[datetime, Path], master_time: timedelta, master_file: Path, folder_time_offset: datetime) -> list[Path]:
+    paths: list[Path] = []
+    for delta in [0, 1, 2, 3]:
+        for capture_time in folder:
+            time_diff = abs(
+                master_time - (capture_time - folder_time_offset)
+            )
+            if time_diff <= timedelta(seconds=delta):
+                paths.append(folder[capture_time])
+        if len(paths) > 0:
+            break
+    if len(paths) == 1:
+        return paths
+    elif len(paths) == 0:
+        print("0 frames found for", str(master_file))
+    else:
+        print(f"More than 1 frames found for {str(master_file)}: {paths}")
+    return paths
+
+
 def batch_gifs(input_dict: dict[int, dict[datetime, Path]], first_batch_times: list[datetime]) -> list[list[Path]]:
     master_dict = input_dict.pop(0)
     batches: list[list[Path]] = []
     for master_capture_time in master_dict:
         current_batch = []
         for i in input_dict:
-            batch_slice = []
-            for capture_time in input_dict[i]:
-                time_diff = abs(
-                    (master_capture_time - first_batch_times[0]) - (capture_time - first_batch_times[i])
-                )
-                if time_diff <= timedelta(seconds=0):
-                    batch_slice.append(input_dict[i][capture_time])
-                    break
-            if not batch_slice:
-                for capture_time in input_dict[i]:
-                    # print("Not found 0 timedelta")
-                    time_diff = abs(
-                        (master_capture_time - first_batch_times[0]) - (capture_time - first_batch_times[i])
-                    )
-                    if time_diff <= timedelta(seconds=1):
-                        batch_slice.append(input_dict[i][capture_time])
-                        if len(batch_slice) > 1:
-                            print(f"More than one image found for {master_dict[master_capture_time]}, "
-                                  f"Folder: {i + 1}, image: {input_dict[i][capture_time]}")
-                            current_batch.append(batch_slice[0])
-            else:
-                current_batch += batch_slice
+            batch_slice = find_closest_image(
+                input_dict[i],
+                master_capture_time - first_batch_times[0],
+                master_dict[master_capture_time],
+                first_batch_times[i],
+            )
+            current_batch += batch_slice
         print(f"{len(batches)}: {len(current_batch)}")
         batches.append(current_batch)
+    input_dict[0] = master_dict
     return batches
 
 
@@ -114,27 +124,44 @@ def parse_folders(root_path: Path) -> dict[int, dict[datetime, Path]]:
 def main(root_path):
     output_folder = root_path / OUTPUT_FOLDER_NAME
     output_folder.mkdir(exist_ok=True)
+    batch_folder: Path = root_path / "batches"
 
     start_time = time.time()
-    print("Analyzing input images...")
-    first_batch_times = get_first_batch_times(root_path)
-    sorted_paths = parse_folders(root_path)
+    if not batch_folder.exists():
+        batch_folder.mkdir(exist_ok=True)
+        print("Analyzing input images...")
+        first_batch_times = get_first_batch_times(root_path)
+        sorted_paths = parse_folders(root_path)
 
-    print("Folder sizes:")
-    for i in sorted_paths:
-        print(f"\t{i}: {len(sorted_paths[i])}")
+        print("Folder sizes:")
+        for i in sorted_paths:
+            print(f"\t{i}: {len(sorted_paths[i])}")
 
-    print("Creating batches...")
-    batches = batch_gifs(sorted_paths, first_batch_times)
-    number_of_batches = len(batches)
+        print("Creating batches...")
+        batches = batch_gifs(sorted_paths, first_batch_times)
+        number_of_batches = len(batches)
 
-    if 1:
         for i in range(len(batches)):
-            output_path = output_folder / (str(i) + ".gif")
-            print(f"[{i} / {number_of_batches}] {output_path}")
-            generate_gif(batches[i], output_path)
-            if i == -1:
-                break
+            (batch_folder / str(i)).mkdir(exist_ok=True, parents=True)
+            master = list(sorted_paths[0].values())[i]
+            shutil.copy(master, batch_folder / str(i))
+
+            for cam_number in range(len(batches[i])):  # TODO tää ei oo cam number
+                file = batches[i][cam_number]
+                shutil.copy(file, batch_folder / str(i) / (str(cam_number) + "_" + os.path.basename(file)))
+
+        print(os.listdir(batch_folder))
+
+    for batch in os.listdir(batch_folder):
+        if not (batch_folder / batch).is_dir():
+            continue
+        batch_files = os.listdir(batch_folder / batch)
+        for i in range(len(batch_files)):
+            if batch_files[i].lower().startswith("master"):
+                batch_files.pop(i)
+        output_path = output_folder / (batch + ".gif")
+        print(f"Creating {output_path} with {len(batch_files)} images..")
+        generate_gif([batch_folder / batch / filename for filename in batch_files], output_path)
 
     elapsed_seconds = time.time() - start_time
 
