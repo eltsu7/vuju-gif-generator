@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from pprint import pprint
 
-from PIL import Image
+from PIL import Image, GifImagePlugin
 
 SUBFOLDER_NAMES = [
     "master",
@@ -19,7 +19,8 @@ SUBFOLDER_NAMES = [
     "Cam7",
 ]
 
-OUTPUT_FOLDER_NAME = "output"
+OUTPUT_FOLDER_NAME = "output_2"
+BATCH_FOLDER_NAME = "batches"
 
 
 def last_number(filename: str) -> int:
@@ -32,8 +33,12 @@ def get_date_from_image(path: Path) -> datetime:
     datelist = [int(i) for i in datestring.split(":")]
     timelist = [int(i) for i in timestring.split(":")]
     return datetime(
-        year=datelist[0], month=datelist[1], day=datelist[2],
-        hour=timelist[0], minute=timelist[1], second=timelist[2]
+        year=datelist[0],
+        month=datelist[1],
+        day=datelist[2],
+        hour=timelist[0],
+        minute=timelist[1],
+        second=timelist[2],
     )
 
 
@@ -44,7 +49,12 @@ def generate_gif(image_paths: list[Path], output_path: Path):
         print("No images!")
         return
     frames[0].save(
-        fp=output_path, save_all=True, append_images=frames, duration=75, loop=0, optimize=True
+        fp=output_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=75,
+        loop=0,
+        optimize=True,
     )
 
 
@@ -54,103 +64,62 @@ def get_average_light_value(path: Path) -> int:
     return sum(image.getpixel((0, 0)))
 
 
-def get_first_batch_times(root_path: Path) -> list[datetime]:
-    source_folders = [root_path / folder_name for folder_name in SUBFOLDER_NAMES]
-    times: list[datetime] = []
-    for folder in source_folders:
-        filenames = sorted(os.listdir(folder), key=last_number)
-        times.append(get_date_from_image(folder / filenames[0]))
-    return times
+def find_with_timedelta(
+    master_folder: Path, master_index: int, sub_folder: Path, time_delta: timedelta
+):
+    master_file = master_folder / os.listdir(master_folder)[master_index]
+    time_offset = get_date_from_image(
+        master_folder / os.listdir(master_folder)[0]
+    ) - get_date_from_image(sub_folder / os.listdir(sub_folder)[0])
 
+    if os.path.basename(sub_folder) == "Cam1":
+        time_offset -= timedelta(seconds=1)
 
-def find_closest_image(folder: dict[datetime, Path], master_time: timedelta, master_file: Path, folder_time_offset: datetime) -> list[Path]:
-    paths: list[Path] = []
-    for delta in [0, 1, 2, 3]:
-        for capture_time in folder:
-            time_diff = abs(
-                master_time - (capture_time - folder_time_offset)
-            )
-            if time_diff <= timedelta(seconds=delta):
-                paths.append(folder[capture_time])
-        if len(paths) > 0:
-            break
-    if len(paths) == 1:
-        return paths
-    elif len(paths) == 0:
-        print("0 frames found for", str(master_file))
-    else:
-        print(f"More than 1 frames found for {str(master_file)}: {paths}")
+    master_time = get_date_from_image(master_file) - time_offset
+
+    paths = []
+
+    for filename in os.listdir(sub_folder):
+        if abs(master_time - get_date_from_image(sub_folder / filename)) <= time_delta:
+            paths.append(sub_folder / filename)
+
     return paths
 
 
-def batch_gifs(input_dict: dict[int, dict[datetime, Path]], first_batch_times: list[datetime]) -> list[list[Path]]:
-    master_dict = input_dict.pop(0)
-    batches: list[list[Path]] = []
-    for master_capture_time in master_dict:
-        current_batch = []
-        for i in input_dict:
-            batch_slice = find_closest_image(
-                input_dict[i],
-                master_capture_time - first_batch_times[0],
-                master_dict[master_capture_time],
-                first_batch_times[i],
-            )
-            current_batch += batch_slice
-        print(f"{len(batches)}: {len(current_batch)}")
-        batches.append(current_batch)
-    input_dict[0] = master_dict
-    return batches
-
-
-def parse_folders(root_path: Path) -> dict[int, dict[datetime, Path]]:
-    # Master should be first one
-    source_folders = [root_path / folder_name for folder_name in SUBFOLDER_NAMES]
-    output = {}
-    for i in range(len(source_folders)):
-        filenames = sorted(os.listdir(source_folders[i]), key=last_number)
-        for filename in filenames:
-            file_path = source_folders[i] / filename
-            light = get_average_light_value(file_path)
-            if light < 30:
-                print(f"File {str(file_path)} underexposed!")
-                continue
-            capture_time = get_date_from_image(file_path)
-            if i not in output:
-                output[i] = {}
-            output[i][capture_time] = file_path
-    return output
-
-
-def main(root_path):
+def new_batch_files_to_folders(root_path):
     output_folder = root_path / OUTPUT_FOLDER_NAME
     output_folder.mkdir(exist_ok=True)
-    batch_folder: Path = root_path / "batches"
+    batch_folder: Path = root_path / BATCH_FOLDER_NAME
+    master_folder = root_path / "master"
 
-    start_time = time.time()
-    if not batch_folder.exists():
-        batch_folder.mkdir(exist_ok=True)
-        print("Analyzing input images...")
-        first_batch_times = get_first_batch_times(root_path)
-        sorted_paths = parse_folders(root_path)
+    for i in range(len(os.listdir(master_folder))):
+        if (batch_folder / str(i)).exists():
+            continue
 
-        print("Folder sizes:")
-        for i in sorted_paths:
-            print(f"\t{i}: {len(sorted_paths[i])}")
+        current_batch_folder = batch_folder / str(i)
+        print(f"Master: {os.listdir(master_folder)[i]}")
+        paths: list[Path] = []
+        for sub in SUBFOLDER_NAMES[1:]:
+            paths += find_with_timedelta(
+                master_folder, i, root_path / sub, timedelta(seconds=2)
+            )
 
-        print("Creating batches...")
-        batches = batch_gifs(sorted_paths, first_batch_times)
-        number_of_batches = len(batches)
+        current_batch_folder.mkdir(parents=True)
+        shutil.copy(
+            master_folder / (os.listdir(master_folder)[i]), current_batch_folder
+        )
+        for path in paths:
+            print("\t" + str(path))
+            new_file_name = (
+                os.path.basename(os.path.split(path)[0]) + "_" + os.path.split(path)[1]
+            )
+            shutil.copy(path, current_batch_folder / new_file_name)
 
-        for i in range(len(batches)):
-            (batch_folder / str(i)).mkdir(exist_ok=True, parents=True)
-            master = list(sorted_paths[0].values())[i]
-            shutil.copy(master, batch_folder / str(i))
 
-            for cam_number in range(len(batches[i])):  # TODO tää ei oo cam number
-                file = batches[i][cam_number]
-                shutil.copy(file, batch_folder / str(i) / (str(cam_number) + "_" + os.path.basename(file)))
-
-        print(os.listdir(batch_folder))
+def new_batches_to_gifs(root_path):
+    output_folder = root_path / OUTPUT_FOLDER_NAME
+    output_folder.mkdir(exist_ok=True)
+    batch_folder: Path = root_path / BATCH_FOLDER_NAME
 
     for batch in os.listdir(batch_folder):
         if not (batch_folder / batch).is_dir():
@@ -161,14 +130,9 @@ def main(root_path):
                 batch_files.pop(i)
         output_path = output_folder / (batch + ".gif")
         print(f"Creating {output_path} with {len(batch_files)} images..")
-        generate_gif([batch_folder / batch / filename for filename in batch_files], output_path)
-
-    elapsed_seconds = time.time() - start_time
-
-    print(
-        f"Done! That took {round(elapsed_seconds, 2)} seconds, "
-        f"around {round(elapsed_seconds / number_of_batches, 2)} seconds per gif."
-    )
+        generate_gif(
+            [batch_folder / batch / filename for filename in batch_files], output_path
+        )
 
 
 if __name__ == "__main__":
@@ -176,10 +140,11 @@ if __name__ == "__main__":
     parser.add_argument("folder", type=Path)
     args = parser.parse_args()
 
-    root_path: Path = args.folder
-    if not os.path.exists(root_path):
+    root_path_arg: Path = args.folder
+    if not os.path.exists(root_path_arg):
         raise NameError("Invalid path")
     for name in SUBFOLDER_NAMES:
-        if not os.path.exists(root_path / name):
+        if not os.path.exists(root_path_arg / name):
             raise NameError("Can't find correct subfolders")
-    main(root_path)
+    # new_batch_files_to_folders(root_path_arg)
+    new_batches_to_gifs(root_path_arg)
